@@ -1,0 +1,249 @@
+
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+modbus:
+- name: rs485_rtu
+  type: serial
+  method: rtu
+  port: /dev/ttyUSB0
+  baudrate: 9600
+  bytesize: 8
+  parity: N
+  stopbits: 1
+  delay: 0
+  message_wait_milliseconds: 300
+  timeout: 5
+  sensors:
+  # smd630mct - slave 1
+   - name: 630mct_U_L1_to_N_volts
+     address: 0
+     slave: 1
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "V"
+     device_class: "voltage"
+     state_class: "measurement"
+
+   - name: 630_mct_U_L2_to_N_volts
+     address: 2
+     slave: 1
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "V"
+     device_class: "voltage"
+     state_class: "measurement"
+
+   - name: 630mct_U_L3_to_N_volts
+     address: 4
+     slave: 1
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "V"
+     device_class: "voltage"
+     state_class: "measurement"
+
+   - name: 630mct_I_L1_current
+     address: 6
+     slave: 1
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "A"
+     device_class: current
+     state_class: measurement
+
+   - name: 630mct_I_L2_current
+     address: 8
+     slave: 1
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "A"
+     device_class: current
+     state_class: measurement
+
+   - name: 630mct_I_L3_current
+     address: 10
+     slave: 1
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "A"
+     device_class: current
+     state_class: measurement    
+     
+   - name: 630mct_P1_power
+     address: 12
+     slave: 1
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "W"
+     device_class: "power"
+     state_class: "measurement"
+
+   - name: 630mct_P2_power
+     address: 14
+     slave: 1
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "W"
+     device_class: "power"
+     state_class: "measurement"
+          
+   - name: 630mct_P3_power
+     address: 16
+     slave: 1
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "W"
+     device_class: "power"
+     state_class: "measurement"
+     
+   - name: 630mct_sum_of_line_currents
+     address: 48
+     slave: 1
+     input_type: input
+     precision: 3
+     data_type: float32
+     unit_of_measurement: "A"
+     device_class: "current"
+     state_class: "measurement"     
+     
+   - name: 630mct_total_system_power
+     address: 52
+     slave: 1
+     input_type: input
+     precision: 3
+     data_type: float32
+     unit_of_measurement: "W"
+     device_class: "power"
+     state_class: "measurement"    
+     
+   - name: 630mct_total_import_kwh
+     address: 72
+     slave: 1
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "kWh"
+     device_class: "energy"
+     state_class: "measurement"
+
+   - name: 630mct_total_export_kwh
+     address: 74
+     slave: 1
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "kWh"
+     device_class: "energy"
+     state_class: "measurement"
+     
+   - name: NE_U_L1_to_N_volts
+     address: 0
+     slave: 2
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "V"
+     device_class: "voltage"
+     state_class: "measurement"
+     
+   - name: NE_U_L2_to_N_volts
+     address: 2
+     slave: 2
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "V"
+     device_class: "voltage"
+     state_class: "measurement"
+
+   - name: NE_U_L3_to_N_volts
+     address: 4
+     slave: 2
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "V"
+     device_class: "voltage"
+     state_class: "measurement"
+     
+   - name: NE_total_system_power
+     address: 52
+     slave: 2
+     input_type: input
+     precision: 3
+     data_type: float32
+     unit_of_measurement: "W"
+     device_class: "power"
+     state_class: "measurement" 
+     
+   - name: NE_total_import_kwh
+     address: 72
+     slave: 2
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "kWh"
+     device_class: "energy"
+     state_class: "measurement"
+
+knx:
+ sensor:
+  - name: "Weather Station Outside Temperature"
+    state_address: "0/6/4" 
+    type: "temperature"
+    state_class: "measurement"
+ weather:
+  - name: "Weather Station"
+    address_temperature: "0/6/4" 
+    address_wind_speed: "0/6/5"
+    address_day_night: "0/6/20"
+    address_brightness_south: "0/6/11"
+    address_brightness_west: "0/6/12"
+    address_brightness_east: "0/6/10"
+    sync_state: true
+     
+template: !include template.yaml
+
+# ===========================================
+# REGULATOR MOCY - HELPER ENTITIES
+# ===========================================
+
+input_boolean:
+  power_regulator_auto_mode:
+    name: "Regulator Mocy - Tryb Automatyczny"
+    icon: mdi:robot
+
+input_number:
+  power_regulator_manual_setpoint:
+    name: "Regulator Mocy - Nastawa Ręczna"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:tune
+
+  heater_max_power:
+    name: "Grzałka - Moc Maksymalna"
+    min: 500
+    max: 5000
+    step: 100
+    initial: 2000
+    unit_of_measurement: "W"
+    icon: mdi:radiator

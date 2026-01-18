@@ -1,0 +1,240 @@
+# ===========================================
+# AUTOMATYZACJA STEROWANIA REGULATOREM MOCY
+# ===========================================
+
+- id: 'power_regulator_auto_control'
+  alias: "Regulator Mocy - Sterowanie Automatyczne"
+  description: "Płynna regulacja mocy grzałki na podstawie nadwyżki PV"
+  mode: single
+
+  trigger:
+    # Uruchamiaj co 10 sekund dla płynnej regulacji
+    - platform: time_pattern
+      seconds: "/10"
+    # Lub przy znaczącej zmianie mocy z sieci
+    - platform: state
+      entity_id: sensor.sdm630_total_system_power
+
+  condition:
+    # Tylko w trybie automatycznym
+    - condition: state
+      entity_id: input_boolean.power_regulator_auto_mode
+      state: 'on'
+    # Wszystkie używane sensory muszą być dostępne
+    - condition: template
+      value_template: >
+        {{ states('sensor.deye12kw_pv_power') not in ['unavailable', 'unknown']
+           and states('sensor.deye12kw_microinverter_power') not in ['unavailable', 'unknown']
+           and states('sensor.deye12kw_load_ups_power') not in ['unavailable', 'unknown']
+           and states('sensor.sdm630_total_system_power') not in ['unavailable', 'unknown']
+           and states('sensor.ne_total_system_power') not in ['unavailable', 'unknown']
+           and states('sensor.jk_baterry_ble_main_czna_moc_przyjmowana') not in ['unavailable', 'unknown']
+           and states('sensor.jk_baterry_ble_main_czna_moc_oddawana') not in ['unavailable', 'unknown']
+           and states('number.power_regulator_regulator_mocy') not in ['unavailable', 'unknown'] }}
+
+  action:
+    - variables:
+        # Odczytaj wszystkie wartości
+        pv_power: "{{ states('sensor.deye12kw_pv_power') | float(0) }}"
+        microinverter_power: "{{ states('sensor.deye12kw_microinverter_power') | float(0) }}"
+        total_pv_power: "{{ states('sensor.deye12kw_pv_power') | float(0) + states('sensor.deye12kw_microinverter_power') | float(0) }}"
+        home_load: "{{ states('sensor.deye12kw_load_ups_power') | float(0) }}"
+        grid_power: "{{ states('sensor.sdm630_total_system_power') | float(0) }}"
+        # Moc pobierana przez grzałkę + EV (kontrolowane obciążenie)
+        controlled_load: "{{ states('sensor.ne_total_system_power') | float(0) }}"
+        battery_charging: "{{ states('sensor.jk_baterry_ble_main_czna_moc_przyjmowana') | float(0) }}"
+        battery_discharging: "{{ states('sensor.jk_baterry_ble_main_czna_moc_oddawana') | float(0) }}"
+        heater_max: "{{ states('input_number.heater_max_power') | float(2000) }}"
+        current_level: "{{ states('number.power_regulator_regulator_mocy') | float(0) }}"
+
+    - variables:
+        # Oblicz dostępną nadwyżkę
+        # home_load + controlled_load = całkowite zużycie domu
+        # surplus = ile mocy możemy JESZCZE dodać zanim zaczniemy pobierać z sieci
+        surplus: >
+          {% set base_surplus = total_pv_power - home_load - controlled_load - battery_charging %}
+          {% if battery_discharging > 10 %}
+            {{ [base_surplus - battery_discharging, 0] | max }}
+          {% else %}
+            {{ base_surplus }}
+          {% endif %}
+
+    - variables:
+        # Oblicz docelowy poziom regulatora
+        # Priorytet: NIE pobierać z sieci!
+        target_level: >
+          {% if total_pv_power < 100 %}
+            {# Brak generacji PV - wyłącz regulator #}
+            0
+          {% elif battery_discharging > 50 %}
+            {# Bateria się rozładowuje - natychmiast zmniejsz #}
+            {% set reduce = (battery_discharging / heater_max * 100) | round(0) %}
+            {{ [[current_level - reduce - 5, 0] | max, 100] | min }}
+          {% elif grid_power > 30 %}
+            {# PRIORYTET: Pobieramy z sieci - zmniejsz regulator #}
+            {% set reduce = (grid_power / heater_max * 100) | round(0) %}
+            {# Agresywniejsza redukcja - min 5%, max 20% na cykl #}
+            {% set step = [[reduce, 5] | max, 20] | min %}
+            {{ [[current_level - step, 0] | max, 100] | min }}
+          {% elif surplus < 0 %}
+            {# Nadwyżka ujemna - zmniejsz prewencyjnie zanim zaczniemy pobierać z sieci #}
+            {% set reduce = ((-surplus) / heater_max * 100) | round(0) %}
+            {% set step = [[reduce, 3] | max, 15] | min %}
+            {{ [[current_level - step, 0] | max, 100] | min }}
+          {% elif grid_power < -30 and surplus > 0 %}
+            {# Oddajemy do sieci I mamy nadwyżkę - można zwiększyć regulator #}
+            {% set increase = (-grid_power / heater_max * 100) | round(0) %}
+            {# max_level = ile grzałka może pobrać z dostępnej nadwyżki #}
+            {# surplus to ile możemy DODAĆ, więc max = current + surplus #}
+            {% set max_from_surplus = current_level + (surplus / heater_max * 100) %}
+            {% set step = [increase, 10] | min %}
+            {{ [[[current_level + step, max_from_surplus] | min, 100] | min, 0] | max }}
+          {% else %}
+            {# Bilans bliski zeru - utrzymaj obecny poziom #}
+            {{ current_level }}
+          {% endif %}
+
+    # Ustaw nowy poziom regulatora tylko jeśli się zmienił
+    - condition: template
+      value_template: "{{ (target_level | int) != (current_level | int) }}"
+
+    - service: number.set_value
+      target:
+        entity_id: number.power_regulator_regulator_mocy
+      data:
+        value: "{{ target_level | int }}"
+
+    - service: logbook.log
+      data:
+        name: "Regulator Mocy"
+        message: >
+          Auto: {{ current_level | int }}% → {{ target_level | int }}%
+          (PV: {{ total_pv_power | int }}W [{{ pv_power | int }}+{{ microinverter_power | int }}], Grid: {{ grid_power | int }}W,
+          NE: {{ controlled_load | int }}W, Bat+: {{ battery_charging | int }}W, Bat-: {{ battery_discharging | int }}W)
+
+
+# ===========================================
+# TRYB RĘCZNY - Ustawianie wartości ręcznej
+# ===========================================
+
+- id: 'power_regulator_manual_control'
+  alias: "Regulator Mocy - Sterowanie Ręczne"
+  description: "Ustawia regulator na wartość ręczną gdy tryb auto jest wyłączony"
+  mode: restart
+
+  trigger:
+    - platform: state
+      entity_id: input_number.power_regulator_manual_setpoint
+    - platform: state
+      entity_id: input_boolean.power_regulator_auto_mode
+      to: 'off'
+
+  condition:
+    - condition: state
+      entity_id: input_boolean.power_regulator_auto_mode
+      state: 'off'
+
+  action:
+    - service: number.set_value
+      target:
+        entity_id: number.power_regulator_regulator_mocy
+      data:
+        value: "{{ states('input_number.power_regulator_manual_setpoint') | int }}"
+
+
+# ===========================================
+# BEZPIECZEŃSTWO - Wyłącz przy rozładowaniu baterii
+# ===========================================
+
+- id: 'power_regulator_battery_protection'
+  alias: "Regulator Mocy - Ochrona Baterii"
+  description: "Natychmiast wyłącz regulator gdy bateria się rozładowuje zbyt mocno"
+  mode: single
+
+  trigger:
+    - platform: numeric_state
+      entity_id: sensor.jk_baterry_ble_main_czna_moc_oddawana
+      above: 200
+      for:
+        seconds: 5
+
+  condition:
+    - condition: state
+      entity_id: input_boolean.power_regulator_auto_mode
+      state: 'on'
+    - condition: numeric_state
+      entity_id: number.power_regulator_regulator_mocy
+      above: 0
+
+  action:
+    - service: number.set_value
+      target:
+        entity_id: number.power_regulator_regulator_mocy
+      data:
+        value: 0
+
+    - service: persistent_notification.create
+      data:
+        title: "Regulator Mocy"
+        message: "Wyłączono regulator - wykryto rozładowanie baterii"
+        notification_id: power_regulator_battery
+
+
+# ===========================================
+# BEZPIECZEŃSTWO - Wyłącz przy braku PV
+# ===========================================
+
+- id: 'power_regulator_no_pv_protection'
+  alias: "Regulator Mocy - Ochrona Brak PV"
+  description: "Wyłącz regulator gdy brak generacji PV"
+  mode: single
+
+  trigger:
+    - platform: numeric_state
+      entity_id: sensor.deye12kw_pv_power
+      below: 100
+      for:
+        minutes: 1
+
+  condition:
+    - condition: state
+      entity_id: input_boolean.power_regulator_auto_mode
+      state: 'on'
+    - condition: numeric_state
+      entity_id: number.power_regulator_regulator_mocy
+      above: 0
+
+  action:
+    - service: number.set_value
+      target:
+        entity_id: number.power_regulator_regulator_mocy
+      data:
+        value: 0
+
+
+# ===========================================
+# ALERT - Krytyczne rozładowanie baterii
+# ===========================================
+
+- id: 'battery_critical_discharge_alert'
+  alias: "Alert - Krytyczne rozladowanie baterii"
+  description: "Powiadomienie gdy bateria rozladowuje sie powyzej 4000W"
+  mode: single
+
+  trigger:
+    - platform: numeric_state
+      entity_id: sensor.jk_baterry_ble_main_czna_moc_oddawana
+      above: 4000
+      for:
+        seconds: 10
+
+  action:
+    - service: persistent_notification.create
+      data:
+        title: "Krytyczne rozladowanie baterii"
+        message: >
+          Bateria rozladowuje sie moca {{ states('sensor.jk_baterry_ble_main_czna_moc_oddawana') | round(0) }}W!
+          PV: {{ states('sensor.deye12kw_pv_power') | round(0) }}W,
+          Dom: {{ states('sensor.deye12kw_load_ups_power') | round(0) }}W.
+          Sprawdz duze odbiorniki (EV, klimatyzacja).
+        notification_id: battery_critical_discharge

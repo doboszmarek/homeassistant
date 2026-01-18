@@ -1,0 +1,95 @@
+- sensor:
+  - name: "DOM Energy Total"
+    unique_id: dom_energy_total
+    state_class: "measurement"
+    device_class: "energy"
+    unit_of_measurement: "kWh"
+    state: >
+      {{ [ states('sensor.shellyem3_phase_a_energy'), 
+           states('sensor.shellyem3_phase_b_energy'),
+           states('sensor.shellyem3_phase_c_energy') ]
+         | map('float') | sum }}
+    attributes:         
+      last_reset: '1970-01-01T00:00:00+00:00'
+    availability: >
+      {{ not 'unavailable' in 
+         [ states('sensor.shellyem3_phase_a_energy'), 
+           states('sensor.shellyem3_phase_b_energy'),
+           states('sensor.shellyem3_phase_c_energy') ] }} 
+  - name: "DOM Power Total"
+    unique_id: dom_power_total
+    state: >-
+      {{ (states('sensor.shellyem3_phase_a_power')|float +
+          states('sensor.shellyem3_phase_b_power')|float +
+          states('sensor.shellyem3_phase_c_power')|float) }}
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+
+  # ===========================================
+  # REGULATOR MOCY - TEMPLATE SENSORS
+  # ===========================================
+
+  # Dostępna moc nadwyżkowa dla regulatora
+  - name: "Regulator - Dostępna Moc Nadwyżkowa"
+    unique_id: regulator_available_surplus_power
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    state: >
+      {% set pv_power = states('sensor.deye12kw_pv_power') | float(0) %}
+      {% set home_load = states('sensor.deye12kw_load_ups_power') | float(0) %}
+      {% set controlled_load = states('sensor.ne_total_system_power') | float(0) %}
+      {% set battery_charging = states('sensor.jk_baterry_ble_main_czna_moc_przyjmowana') | float(0) %}
+      {% set battery_discharging = states('sensor.jk_baterry_ble_main_czna_moc_oddawana') | float(0) %}
+
+      {# Całkowite zużycie = home_load + controlled_load (grzałka+EV) #}
+      {# surplus = ile mocy możemy JESZCZE dodać zanim pobierzemy z sieci #}
+      {% set surplus = pv_power - home_load - controlled_load - battery_charging %}
+
+      {# Jeśli bateria się rozładowuje, to też zmniejsza dostępną nadwyżkę #}
+      {% if battery_discharging > 10 %}
+        {% set surplus = surplus - battery_discharging %}
+      {% endif %}
+
+      {# Może być ujemny - oznacza że już pobieramy z sieci #}
+      {{ surplus | round(0) }}
+    availability: >
+      {{ states('sensor.deye12kw_pv_power') not in ['unavailable', 'unknown'] and
+         states('sensor.deye12kw_load_ups_power') not in ['unavailable', 'unknown'] and
+         states('sensor.ne_total_system_power') not in ['unavailable', 'unknown'] }}
+
+  # Sugerowany poziom regulatora (0-100%)
+  - name: "Regulator - Sugerowany Poziom"
+    unique_id: regulator_suggested_level
+    unit_of_measurement: "%"
+    state: >
+      {% set surplus = states('sensor.regulator_dostepna_moc_nadwyzkowa') | float(0) %}
+      {% set heater_max = states('input_number.heater_max_power') | float(2000) %}
+      {% set grid_power = states('sensor.sdm630_total_system_power') | float(0) %}
+      {% set current_level = states('number.power_regulator_regulator_mocy') | float(0) %}
+
+      {# surplus może być ujemny - oznacza że już pobieramy z sieci #}
+      {# max_level = current + (surplus/heater_max) - ile możemy mieć max #}
+      {% set max_level = current_level + (surplus / heater_max * 100) %}
+
+      {# Korekta na podstawie przepływu z sieci #}
+      {% if grid_power > 50 %}
+        {# Pobieramy z sieci - zmniejsz #}
+        {% set correction = -(grid_power / heater_max * 100) %}
+      {% elif grid_power < -50 %}
+        {# Oddajemy do sieci - zwiększ #}
+        {% set correction = (-grid_power / heater_max * 100) %}
+      {% else %}
+        {% set correction = 0 %}
+      {% endif %}
+
+      {# Zastosuj korektę z ograniczeniem zmiany #}
+      {% set step = [correction | abs, 15] | min %}
+      {% set target = current_level + (step if correction > 0 else -step if correction < 0 else 0) %}
+
+      {# Nie przekraczaj max_level (bazującego na surplus) i ogranicz do 0-100% #}
+      {% set target = [target, max_level] | min %}
+      {{ [[target, 0] | max, 100] | min | int }}
+    availability: >
+      {{ states('sensor.regulator_dostepna_moc_nadwyzkowa') not in ['unavailable', 'unknown'] }}
