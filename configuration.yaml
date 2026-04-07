@@ -1,0 +1,158 @@
+
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+modbus:
+- name: rs485_rtu
+  type: serial
+  method: rtu
+  port: /dev/ttyUSB0
+  baudrate: 9600
+  bytesize: 8
+  parity: N
+  stopbits: 1
+  delay: 0
+  message_wait_milliseconds: 300
+  timeout: 2
+  sensors:
+   # NE meter - slave 2
+   - name: NE_U_L1_to_N_volts
+     address: 0
+     slave: 2
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "V"
+     device_class: "voltage"
+     state_class: "measurement"
+     
+   - name: NE_U_L2_to_N_volts
+     address: 2
+     slave: 2
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "V"
+     device_class: "voltage"
+     state_class: "measurement"
+
+   - name: NE_U_L3_to_N_volts
+     address: 4
+     slave: 2
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "V"
+     device_class: "voltage"
+     state_class: "measurement"
+     
+   - name: NE_total_system_power
+     address: 52
+     slave: 2
+     input_type: input
+     precision: 3
+     data_type: float32
+     unit_of_measurement: "W"
+     device_class: "power"
+     state_class: "measurement"
+     scan_interval: 10 
+     
+   - name: NE_total_import_kwh
+     address: 72
+     slave: 2
+     input_type: input
+     precision: 2
+     data_type: float32
+     unit_of_measurement: "kWh"
+     device_class: "energy"
+     state_class: "measurement"
+
+knx:
+ sensor:
+  - name: "Weather Station Outside Temperature"
+    state_address: "0/6/4" 
+    type: "temperature"
+    state_class: "measurement"
+ weather:
+  - name: "Weather Station"
+    address_temperature: "0/6/4" 
+    address_wind_speed: "0/6/5"
+    address_day_night: "0/6/20"
+    address_brightness_south: "0/6/11"
+    address_brightness_west: "0/6/12"
+    address_brightness_east: "0/6/10"
+    sync_state: true
+     
+template: !include template.yaml
+
+# ===========================================
+# GRZAŁKA - ENERGIA (Integration sensor)
+# ===========================================
+sensor:
+  - platform: integration
+    source: sensor.bojler_moc_chwilowa
+    name: Grzalka Energia
+    unit_prefix: k
+    round: 2
+    method: left
+
+# ===========================================
+# GRZAŁKA - UTILITY METER (dzienne/miesięczne/roczne)
+# ===========================================
+utility_meter:
+  grzalka_energia_dziennie:
+    source: sensor.grzalka_energia
+    cycle: daily
+  grzalka_energia_miesiecznie:
+    source: sensor.grzalka_energia
+    cycle: monthly
+  grzalka_energia_rocznie:
+    source: sensor.grzalka_energia
+    cycle: yearly
+
+# ===========================================
+# REGULATOR MOCY - HELPER ENTITIES
+# ===========================================
+
+input_boolean:
+  power_regulator_auto_mode:
+    name: "Regulator Mocy - Tryb Automatyczny"
+    icon: mdi:robot
+
+  power_regulator_cooldown:
+    name: "Regulator Mocy - Cooldown Aktywny"
+    icon: mdi:timer-sand
+
+input_number:
+  power_regulator_manual_setpoint:
+    name: "Regulator Mocy - Nastawa Ręczna"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:tune
+
+  power_regulator_manual_saved_value:
+    name: "Regulator Mocy - Zapamiętana Wartość (Internal)"
+    min: 0
+    max: 100
+    step: 1
+    initial: 0
+    unit_of_measurement: "%"
+    icon: mdi:content-save
+
+  power_regulator_max_temperature:
+    name: "Regulator Mocy - Maksymalna Temperatura"
+    min: 20
+    max: 80
+    step: 0.5
+    initial: 40
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-alert
