@@ -1,0 +1,328 @@
+globals:
+  - id: show_welcome_screen
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+
+esphome:
+  name: power-regulator
+  friendly_name: power_regulator
+  on_boot: 
+    priority: -100
+    then:
+      - delay: 5s
+      - globals.set: 
+          id: show_welcome_screen
+          value: 'false'
+      - lambda: |-
+          id(my_display).set_update_interval(1000);  
+          id(oled_display).set_update_interval(1000);
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+    sdkconfig_options:
+      CONFIG_ESP_MAIN_TASK_STACK_SIZE: "32768"
+      CONFIG_ESP_WIFI_TASK_WDT_TIMEOUT_MS: "10000"
+      CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE: "4096"
+      CONFIG_PM_ENABLE: "n"
+  flash_size: 4MB
+# Enable logging
+logger:
+  level: INFO
+  hardware_uart: UART0
+  baud_rate: 115200
+  
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "kh2Llsu6ld7kAa9XHPMhcIEAktdSRqP6/Xdh7krXkVo="
+
+ota:
+  - platform: esphome
+    password: "123456"
+web_server:
+  port: 80
+  auth: 
+    username: admin
+    password: 'admin'
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Power-Regulator Fallback Hotspot"
+    password: "YWuCdG1qEHew"
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+i2c:
+  sda: GPIO26  # Zmienione z GPIO21
+  scl: GPIO27  # Nowy pin
+  scan: true
+  id: bus_a
+
+time:
+  - platform: homeassistant
+    id: s_time
+    timezone: "Europe/Warsaw"
+output:
+  - platform: slow_pwm
+    pin: GPIO25
+    id: regulator_pwm
+    period: 1000ms
+font:
+  - file: "Font/arial.ttf"
+    id: font1
+    size: 10 
+  - file: "Font/Lexend-Regular.ttf"
+    id: font2
+  - file: "Font/arial.ttf"
+    id: font3
+    size: 14
+  - file: "Font/Lexend-Regular.ttf"
+    id: font4
+    size: 14
+
+image:
+  - file: "images/monika2.png"
+    id: monika
+    type: BINARY
+    
+number:
+  - platform: template
+    name: "Regulator Mocy"
+    id: moc_suwak
+    min_value: 0
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    initial_value: 0
+    optimistic: true
+    # Akcja wykonywana przy przesunięciu suwaka w HA
+    set_action:
+      then:
+        - output.set_level:
+            id: regulator_pwm
+            level: !lambda "return x / 100.0;"
+captive_portal:
+sensor:
+  - platform: wifi_signal
+    id: wifi_rssi
+    update_interval: 20s # Częste odświeżanie dla podglądu na żywo
+
+  - platform: homeassistant
+    id: eastron_power
+    entity_id: sensor.dom_power_total
+    internal: false 
+    filters: 
+      - heartbeat: 3s 
+  - platform: homeassistant
+    id: eastron_power_2
+    entity_id: sensor.sdm630_total_system_power
+    internal: false 
+    filters: 
+      - heartbeat: 3s
+  - platform: shtcx
+    temperature:
+      name: "Temperatura"
+      id: shtc3_temperature
+      filters:
+        - offset: 0.0  # Kalibracja jeśli potrzebna
+    humidity:
+      name: "Wilgotność"
+      id: shtc3_humidity
+      filters:
+        - offset: 0.0  # Kalibracja jeśli potrzebna
+    address: 0x70
+    update_interval: 10s  # Odświeżanie co 10 sekund
+display:
+  - platform: ssd1322_spi
+    model: "SSD1322 256x64"
+    id: my_display
+    dc_pin: GPIO16
+    cs_pin: GPIO14
+    reset_pin: GPIO17
+    data_rate: 8M
+    update_interval: 0.1s
+    brightness: 0.5
+    lambda: |-
+      auto time = id(s_time).now();
+      static const char *const DAYS[] = {"Niedziela", "Poniedzialek", "Wtorek", "Sroda", "Czwartek", "Piatek", "Sobota"};
+      float rssi = id(wifi_rssi).state;
+      int x_pos = 240; 
+      int y_pos = 10;
+      const int X_RIGHT = 252;
+      const int X_LEFT = 105;
+      const int Y_GRID = 10;
+      const int Y_DOM = 27;
+      const int Y_BOJ = 43;
+      const char* text_wait_ha="Czekam na HomeAssistant";
+      
+      if (id(show_welcome_screen)) {
+        it.image(0,0,id(monika));
+        int scroll_x = max(96,256 - (int)((millis() / 15) % 450)); 
+        int text_start_y = 15; 
+        it.printf(scroll_x, text_start_y, id(font3), TextAlign::TOP_LEFT, "POWER REGULATOR");
+        it.printf(scroll_x, text_start_y + 22, id(font1), TextAlign::TOP_LEFT, "Witaj w systemie!");
+        it.printf(scroll_x, text_start_y + 37, id(font1), TextAlign::TOP_LEFT, "Inicjalizacja...");
+      } else {
+        if(network::is_connected()){
+          it.printf(0,0, id(font1), TextAlign::TOP_LEFT, "IP: %s", id(my_ip_adress).state.c_str());
+        }  else {
+          it.print(0, 0, id(font1), TextAlign::TOP_LEFT, "IP: Brak...");
+        }
+        if (id(wifi_rssi).has_state()) {
+          if (rssi >= -80) it.filled_rectangle(x_pos,      y_pos-2, 2, 2); 
+          if (rssi >= -70) it.filled_rectangle(x_pos + 3,  y_pos-4, 2, 4); 
+          if (rssi >= -60) it.filled_rectangle(x_pos + 6,  y_pos-6, 2, 6); 
+          if (rssi >= -50) it.filled_rectangle(x_pos + 9,  y_pos-8, 2, 8); 
+
+          if (id(wifi_ssid_sensor).has_state()) {
+          it.printf(x_pos - 5, 0, id(font1), TextAlign::TOP_RIGHT, "%s [%.0f dBm]", 
+                    id(wifi_ssid_sensor).state.c_str(), id(wifi_rssi).state);
+          } else {
+            it.print(0, 0, id(font1), TextAlign::TOP_LEFT, "WiFi: Rozlaczono");
+          }
+        } else {
+          it.print(x_pos, 0, id(font1), "!");
+        }
+        if(!time.is_valid()) {
+          int text_width = 400;
+          int screen_width = 256;
+          int x_pos = screen_width - ((millis() / 20) % (screen_width + text_width));
+          it.print(x_pos, 30, id(font3), TextAlign::TOP_LEFT, text_wait_ha);
+
+        } else {
+          it.strftime(0, Y_GRID, id(font2), TextAlign::TOP_LEFT, "%H:%M:%S", time);
+          it.print(0, 30, id(font1), TextAlign::TOP_LEFT, DAYS[time.day_of_week - 1]);
+        
+          it.rectangle(0, 43, 96, 8);
+          float bar_width = (id(moc_suwak).state / 100.0) * 94.0;
+          it.filled_rectangle(1, 44, (int)bar_width, 6);
+          const char* mode_str = id(auto_mode).state ? "AUTO" : "MANUAL";
+          it.printf(1, 52, id(font1), TextAlign::TOP_LEFT, "[%s] Moc: %.0f%%", mode_str, id(moc_suwak).state);
+
+          it.printf(X_LEFT, Y_DOM, id(font2), TextAlign::TOP_LEFT, "Dom:");
+          it.printf(X_LEFT, Y_BOJ, id(font2), TextAlign::TOP_LEFT, "Boj.:");
+          it.printf(X_LEFT, Y_GRID, id(font2), TextAlign::TOP_LEFT, "Grid:");
+          if(id(eastron_power).has_state()){       
+            it.printf(X_RIGHT, Y_DOM, id(font2), TextAlign::TOP_RIGHT, "%.0f W", id(eastron_power).state);
+            it.printf(X_RIGHT, Y_BOJ, id(font2), TextAlign::TOP_RIGHT, "%.0f W", id(eastron_power).state);
+          } else {
+            it.printf(X_RIGHT, Y_DOM, id(font2), TextAlign::TOP_RIGHT, "no data");
+            it.printf(X_RIGHT, Y_BOJ, id(font2), TextAlign::TOP_RIGHT, "no data");
+          }
+          if(id(eastron_power_2).has_state()){
+            it.printf(X_RIGHT, Y_GRID, id(font2), TextAlign::TOP_RIGHT, "%.0f W", id(eastron_power_2).state);
+          } else {
+            it.printf(X_RIGHT, Y_GRID, id(font2), TextAlign::TOP_RIGHT, "no data");
+          }
+        }
+      }
+
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    id: oled_display
+    address: 0x3C
+    update_interval: 1s
+    lambda: |-
+      auto time = id(s_time).now();
+      static const char *const DAYS[] = {"Nie", "Pon", "Wto", "Sro", "Czw", "Pia", "Sob"};
+      float rssi = id(wifi_rssi).state;
+            if (id(show_welcome_screen)) {
+        
+        it.printf(64, 15, id(font3), TextAlign::TOP_CENTER, "POWER");
+        it.printf(64, 30, id(font3), TextAlign::TOP_CENTER, "REGULATOR");
+        it.printf(64, 50, id(font1), TextAlign::TOP_CENTER, "Start...");
+      } else {
+       
+        if (id(wifi_rssi).has_state()) {
+          // Ikona WiFi (prawa górna)
+          int wifi_x = 118;
+          if (rssi >= -80) it.filled_rectangle(wifi_x, 2, 2, 2);
+          if (rssi >= -70) it.filled_rectangle(wifi_x+3, 1, 2, 3);
+          if (rssi >= -60) it.filled_rectangle(wifi_x+6, 0, 2, 4);
+          if (rssi >= -50) it.filled_rectangle(wifi_x+9, 0, 2, 5);
+        }
+        
+        if(time.is_valid()) {
+          it.strftime(0, 0, id(font1), TextAlign::TOP_LEFT, "%H:%M:%S", time);
+          it.printf(95, 0, id(font1), TextAlign::TOP_RIGHT, "%s", DAYS[time.day_of_week - 1]);
+        } else {
+          it.print(0, 0, id(font1), TextAlign::TOP_LEFT, "Czekam...");
+        }
+        
+       
+        // ═══════════════════════════════════════
+        // TEMPERATURA I WILGOTNOŚĆ
+        // ═══════════════════════════════════════
+        
+        // ───────────────────────────────────────
+        // IKONA TERMOMETRU (większa)
+        // ───────────────────────────────────────
+        int thermo_x = 10;
+        int thermo_y = 18;
+        
+        // Rurka termometru (szersza i wyższa)
+        it.rectangle(thermo_x, thermo_y, 6, 16);
+        
+        // Linie rtęci wewnątrz
+        it.line(thermo_x + 2, thermo_y + 2, thermo_x + 2, thermo_y + 14);
+        it.line(thermo_x + 4, thermo_y + 2, thermo_x + 4, thermo_y + 14);
+        
+        // Bańka na dole (większa)
+        it.filled_circle(thermo_x + 3, thermo_y + 18, 4);
+        
+        // Temperatura - duże cyfry
+        if(id(shtc3_temperature).has_state()) {
+          it.printf(70, 18, id(font4), TextAlign::TOP_CENTER, "%.1f°C", id(shtc3_temperature).state);
+        } else {
+          it.print(70, 18, id(font4), TextAlign::TOP_CENTER, "--.-°C");
+        }
+        
+        // ───────────────────────────────────────
+        // IKONA KROPLI (większa)
+        // ───────────────────────────────────────
+        int drop_x = 13;
+        int drop_y = 42;
+        
+        // Górna część kropli (trójkąt)
+        it.filled_triangle(
+          drop_x, drop_y,           // Wierzchołek
+          drop_x - 5, drop_y + 8,   // Lewy dolny
+          drop_x + 5, drop_y + 8    // Prawy dolny
+        );
+        
+        // Dolna część kropli (większy okrąg)
+        it.filled_circle(drop_x, drop_y + 11, 5);
+        
+        // Wilgotność - duże cyfry
+        if(id(shtc3_humidity).has_state()) {
+          it.printf(70, 42, id(font4), TextAlign::TOP_CENTER, "%.0f%%", id(shtc3_humidity).state);
+        } else {
+          it.print(70, 42, id(font4), TextAlign::TOP_CENTER, "--%");
+        }
+      }
+
+        
+
+binary_sensor:
+  - platform: homeassistant
+    id: auto_mode
+    entity_id: input_boolean.power_regulator_auto_mode
+    internal: true
+
+text_sensor:
+
+  # Wifi Info
+  - platform: wifi_info
+    ip_address:
+      name: "IP"
+      id: my_ip_adress
+    ssid:
+      name: "SSID"
+      id: wifi_ssid_sensor 
+    mac_address:
+      name: "MAC" 
